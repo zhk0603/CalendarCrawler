@@ -18,13 +18,14 @@ namespace CalendarCrawler
         {
             var beginYear = int.Parse(System.Configuration.ConfigurationManager.AppSettings["beginYear"]);
             var endYear = int.Parse(System.Configuration.ConfigurationManager.AppSettings["endYear"]);
+            var sleep = int.Parse(System.Configuration.ConfigurationManager.AppSettings["Sleep"]);
 
             var opt = new ClandarPipelineOptions
             {
                 Name = nameof(ClandarPipeline),
                 BeginYear = beginYear,
                 EndYear = endYear,
-                Sleep = 1000
+                Sleep = sleep
             };
 
             var crawler = CrawlerBuilder.Current
@@ -77,13 +78,17 @@ namespace CalendarCrawler
 
                 // 重试3次。
                 Page responsePage = null;
-                var index = 3;
+                var index = 4;
                 do
                 {
-                    if (index < 3)
+                    if (index < 4)
                     {
                         Logger.Warn($"重试：{requestSite.Url}");
-                        Thread.Sleep(5 * 1000);
+                        if (responsePage != null)
+                        {
+                            Logger.Trace(responsePage.HtmlSource);
+                        }
+                        Thread.Sleep(60 * 1000);
                     }
                     responsePage = Options.Downloader.GetPage(requestSite);
                     index--;
