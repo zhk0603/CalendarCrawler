@@ -72,7 +72,8 @@ namespace CalendarCrawler
             {
                 var requestSite = context.Site;
                 requestSite.Referer = "https://wannianrili.51240.com/";
-                requestSite.Accept = "*/*";
+                requestSite.Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8";
+                requestSite.UserAgent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.181 Safari/537.36";
 
                 // 重试3次。
                 Page responsePage = null;
@@ -81,6 +82,7 @@ namespace CalendarCrawler
                 {
                     if (index < 3)
                     {
+                        Logger.Warn($"重试：{requestSite.Url}");
                         Thread.Sleep(5 * 1000);
                     }
                     responsePage = Options.Downloader.GetPage(requestSite);
@@ -108,12 +110,12 @@ namespace CalendarCrawler
                     }
                     else
                     {
-                        Logger.Error($"链接爬取失败：{requestSite.Url}");
+                        Logger.Fatal($"链接爬取失败：{requestSite.Url}");
                     }
                 }
                 else
                 {
-                    Logger.Error($"链接爬取失败：{requestSite.Url}");
+                    Logger.Fatal($"链接爬取失败：{requestSite.Url}");
                 }
             }
 
@@ -139,8 +141,7 @@ namespace CalendarCrawler
                 var year = model.Date.Year;
                 var month = model.Date.Month.ToString().PadLeft(2, '0');
                 var sb = new StringBuilder();
-                sb.Append($@"
-window.Calendar = window.Calendar || {{}};
+                sb.Append($@"window.Calendar = window.Calendar || {{}};
 window.Calendar.HuangLi = window.Calendar.HuangLi || {{}};
 window.Calendar.HuangLi['y{year}'] = window.Calendar.HuangLi['y{year}'] || [];");
                 sb.AppendLine();
@@ -161,7 +162,7 @@ window.Calendar.HuangLi['y{year}'] = window.Calendar.HuangLi['y{year}'] || [];")
                 var fileStream = System.IO.File.Open(System.IO.Path.Combine(savePath, fileName),
                     System.IO.FileMode.OpenOrCreate);
 
-                byte[] data = System.Text.Encoding.Default.GetBytes(sb.ToString());
+                byte[] data = Encoding.Default.GetBytes(sb.ToString());
                 fileStream.Write(data, 0, data.Length);
                 fileStream.Flush();
                 fileStream.Close();
