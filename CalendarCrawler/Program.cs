@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Crawler;
 using Crawler.Pipelines;
@@ -73,8 +74,20 @@ namespace CalendarCrawler
                 requestSite.Referer = "https://wannianrili.51240.com/";
                 requestSite.Accept = "*/*";
 
-                var responsePage = Options.Downloader.GetPage(requestSite);
-                if (responsePage.HttpStatusCode == 200)
+                // 重试3次。
+                Page responsePage = null;
+                var index = 3;
+                do
+                {
+                    if (index < 3)
+                    {
+                        Thread.Sleep(5 * 1000);
+                    }
+                    responsePage = Options.Downloader.GetPage(requestSite);
+                    index--;
+                } while (index > 0 && (responsePage.HttpStatusCode != 200 || responsePage.DocumentNode == null));
+
+                if (responsePage.HttpStatusCode == 200 && responsePage.DocumentNode != null)
                 {
                     var allDayList = responsePage.DocumentNode.SelectNodes("//div[@class=\"wnrl_k_you\"]");
                     if (allDayList != null && allDayList.Count > 0)
@@ -90,6 +103,7 @@ namespace CalendarCrawler
                         }
 
                         _huangliScheduler.Push(month);
+                        Logger.Info($"{month.Date:yyyy-MM} 爬取页面完成");
                         return Task.FromResult(true);
                     }
                     else
@@ -132,8 +146,7 @@ window.Calendar.HuangLi['y{year}'] = window.Calendar.HuangLi['y{year}'] || [];")
                 sb.AppendLine();
                 foreach (var day in model.HuangliDays)
                 {
-                    sb.Append($@"
-window.Calendar.HuangLi['y{year}']['d{month}{day.Day}'] = {day}
+                    sb.Append($@"window.Calendar.HuangLi['y{year}']['d{month}{day.Day.ToString().PadLeft(2, '0')}'] = {day}
 ");
                 }
 
@@ -153,6 +166,7 @@ window.Calendar.HuangLi['y{year}']['d{month}{day.Day}'] = {day}
                 fileStream.Flush();
                 fileStream.Close();
 
+                Logger.Info($"js导出成功，{fileName}");
             }
 
             return Task.FromResult(false);
