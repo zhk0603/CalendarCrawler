@@ -167,7 +167,7 @@ window.Calendar.HuangLi['y{year}'] = window.Calendar.HuangLi['y{year}'] || [];")
                 var fileStream = System.IO.File.Open(System.IO.Path.Combine(savePath, fileName),
                     System.IO.FileMode.OpenOrCreate);
 
-                byte[] data = Encoding.Default.GetBytes(sb.ToString());
+                byte[] data = Encoding.UTF8.GetBytes(sb.ToString());
                 fileStream.Write(data, 0, data.Length);
                 fileStream.Flush();
                 fileStream.Close();
