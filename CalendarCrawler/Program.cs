@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using CalendarCrawler.Entity;
 using Crawler;
 using Crawler.Pipelines;
 using Crawler.Schedulers;
@@ -20,6 +21,7 @@ namespace CalendarCrawler
             var endYear = int.Parse(System.Configuration.ConfigurationManager.AppSettings["endYear"]);
             var sleep = int.Parse(System.Configuration.ConfigurationManager.AppSettings["Sleep"]);
 
+
             var opt = new ClandarPipelineOptions
             {
                 Name = nameof(ClandarPipeline),
@@ -30,7 +32,8 @@ namespace CalendarCrawler
 
             var crawler = CrawlerBuilder.Current
                 .UsePipeline<ClandarPipeline>(opt)
-                .UsePipeline<BuilderJsPipeline>(new PipelineOptions {Name = nameof(BuilderJsPipeline)})
+               // .UsePipeline<BuilderJsPipeline>(new PipelineOptions {Name = nameof(BuilderJsPipeline)}) //js输出
+                .UsePipeline<BuilderDatabasePipeline>(new PipelineOptions { Name = nameof(BuilderDatabasePipeline) }) //写入数据库
                 .UseMultiThread(1)
                 .UseNamed("黄历爬虫")
                 .Builder();
@@ -42,11 +45,11 @@ namespace CalendarCrawler
     }
 
     /// <summary>
-    /// 抓取  https://wannianrili.51240.com/ 中的黄历信息。
+    /// 抓取  https://wannianrili.bmcx.com/ 中的黄历信息。
     /// </summary>
     public class ClandarPipeline : CrawlerPipeline<ClandarPipelineOptions>
     {
-        private const string Api = "https://wannianrili.51240.com/ajax/?q={0}&v=17052214";
+        private const string Api = "https://wannianrili.bmcx.com/ajax/?q={0}&v=17052214";
 
         private readonly IScheduler _huangliScheduler;
 
@@ -72,7 +75,7 @@ namespace CalendarCrawler
             if (context.Site != null)
             {
                 var requestSite = context.Site;
-                requestSite.Referer = "https://wannianrili.51240.com/";
+                requestSite.Referer = "https://wannianrili.bmcx.com/";
                 requestSite.Accept = "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8";
                 requestSite.UserAgent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/66.0.3359.181 Safari/537.36";
 
@@ -96,17 +99,40 @@ namespace CalendarCrawler
 
                 if (responsePage.HttpStatusCode == 200 && responsePage.DocumentNode != null)
                 {
+                    //获取基础信息
                     var allDayList = responsePage.DocumentNode.SelectNodes("//div[@class=\"wnrl_k_you\"]");
+                    //获取详细信息
+                    var allDayDetailList = responsePage.DocumentNode.SelectNodes("//div[@class=\"wnrl_k_xia_nr\"]");
+
                     if (allDayList != null && allDayList.Count > 0)
                     {
                         var month = new HuangliMonth();
 
                         AnalysisHelper.AnalysisMonth(month, responsePage);
-
-                        foreach (var item in allDayList)
+                       
+                        for (int i = 0; i < allDayList.Count; i++)
                         {
-                            var day = AnalysisHelper.GetDay(item, responsePage);
+                            var day = AnalysisHelper.GetDay(allDayList[i], responsePage,i);
+
                             month.HuangliDays.Add(day);
+                        }
+
+                        if (allDayDetailList != null && allDayDetailList.Count > 0)
+                        {
+                            for (int i = 0; i < allDayDetailList.Count; i++)
+                            {
+                                var daydetail = AnalysisHelper.GetDayDetail(allDayDetailList[i], responsePage, i);
+
+                                month.HuangliDaysDetails.Add(daydetail);
+                            }
+                        }
+
+                        foreach (var item in month.HuangliDays)
+                        {
+                            var detailInfo = month.HuangliDaysDetails.Where(x => x.Id == item.Id).FirstOrDefault();
+                            item.JieQi = detailInfo.JieQi;
+
+                            month.resultList.Add(item);
                         }
 
                         _huangliScheduler.Push(month);
@@ -150,10 +176,9 @@ namespace CalendarCrawler
 window.Calendar.HuangLi = window.Calendar.HuangLi || {{}};
 window.Calendar.HuangLi['y{year}'] = window.Calendar.HuangLi['y{year}'] || [];");
                 sb.AppendLine();
-                foreach (var day in model.HuangliDays)
+                foreach (var day in model.resultList)
                 {
-                    sb.Append($@"window.Calendar.HuangLi['y{year}']['d{month}{day.Day.ToString().PadLeft(2, '0')}'] = {day}
-");
+                    sb.Append($@"window.Calendar.HuangLi['y{year}']['d{month}{day.Day.ToString().PadLeft(2, '0')} 节气：{day.JieQi} 节日：{day.JieRi}'] = {day} "+ "\r\n");
                 }
 
                 var savePath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "jsOutput\\");
@@ -179,6 +204,53 @@ window.Calendar.HuangLi['y{year}'] = window.Calendar.HuangLi['y{year}'] || [];")
         }
     }
 
+    /// <summary>
+    /// 生成插入数据库管道.
+    /// </summary>
+    public class BuilderDatabasePipeline : CrawlerPipeline<PipelineOptions>
+    {
+        private static IFreeSql fsql = new FreeSql.FreeSqlBuilder()
+          .UseConnectionString(FreeSql.DataType.PostgreSQL, System.Configuration.ConfigurationManager.ConnectionStrings["connString"].ToString())
+          .UseAutoSyncStructure(true)
+          .Build();
+
+        private readonly IScheduler _huangliScheduler;
+        public BuilderDatabasePipeline(PipelineOptions options) : base(options)
+        {
+            _huangliScheduler = SchedulerManager.GetScheduler<Scheduler<HuangliMonth>>("huangliScheduler");
+        }
+        protected override Task<bool> ExecuteAsync(PipelineContext context)
+        {
+            if (_huangliScheduler.Pop() is HuangliMonth model)
+            {
+                var year = model.Date.Year;
+                var month = model.Date.Month.ToString().PadLeft(2, '0');
+
+                foreach (var day in model.resultList)
+                {
+                    CalendarEntity entity = new CalendarEntity();
+                    entity.LunarDate = day.Nongli;
+                    entity.GregorianDate = DateTime.Parse($"{year}/{month}/{day.Day.ToString().PadLeft(2,'0')}");
+                    entity.SolarTerms = day.JieQi;
+                    entity.TraditionFestival = day.JieRi;
+                    entity.SuitableDo = day.Yi;
+                    entity.TabooDo = day.Ji;
+                    entity.TraditionLunarDate = day.GanZhi;
+
+                    fsql.InsertOrUpdate<CalendarEntity>().SetSource(entity).ExecuteAffrows();
+                }
+
+                Logger.Info($"数据库插入成功");
+            }
+
+            return Task.FromResult(false);
+        }
+
+    }
+
+    /// <summary>
+    /// 解析帮助类
+    /// </summary>
     public class AnalysisHelper
     {
         public static void AnalysisMonth(HuangliMonth month, Page page)
@@ -187,9 +259,11 @@ window.Calendar.HuangLi['y{year}'] = window.Calendar.HuangLi['y{year}'] || [];")
             month.Date = DateTime.Parse(dateNode.InnerText);
         }
 
-        public static HuangliDay GetDay(HtmlNode dayNode, Page page)
+        public static HuangliDay GetDay(HtmlNode dayNode, Page page,int index)
         {
             var day = new HuangliDay();
+            day.Id = index;
+
             var riqiNode = dayNode.SelectSingleNode("div[@class=\"wnrl_k_you_id_wnrl_riqi\"]");
             day.Day = int.Parse(riqiNode.InnerText);
 
@@ -203,22 +277,55 @@ window.Calendar.HuangLi['y{year}'] = window.Calendar.HuangLi['y{year}'] || [];")
 
             day.Ji = jiNode?.InnerText;
 
+            var nongli = dayNode.SelectSingleNode(
+                "div[@class=\"wnrl_k_you_id_wnrl_nongli\"]");
+            day.Nongli = nongli?.InnerText;
+
+            var ganzhi = dayNode.SelectSingleNode(
+                "div[@class=\"wnrl_k_you_id_wnrl_nongli_ganzhi\"]");
+            day.GanZhi = ganzhi?.InnerText;
+
+            var jieri = dayNode.SelectSingleNode(
+                "div[@class=\"wnrl_k_you_id_wnrl_jieri\"]/span[@class=\"wnrl_k_you_id_wnrl_jieri_neirong\"]");
+            day.JieRi = jieri?.InnerText;
+
+            return day;
+        }
+
+        public static HuangliDaysDetail GetDayDetail(HtmlNode dayNode, Page page,int index)
+        {
+            var day = new HuangliDaysDetail();
+            day.Id = index;
+
+            var jieqi = dayNode.SelectNodes(
+                "div[@class=\"wnrl_k_xia_nr_wnrl_beizhu\"]/span[@class=\"wnrl_k_xia_nr_wnrl_beizhu_neirong\"]");
+            day.JieQi = jieqi[9]?.InnerText;
+
             return day;
         }
     }
 
+    /// <summary>
+    /// 管道选项
+    /// </summary>
     public class ClandarPipelineOptions : PipelineOptions
     {
         public int BeginYear { get; set; }
         public int EndYear { get; set; }
     }
 
-    // 黄历月份模型。
+    /// <summary>
+    /// 黄历月份模型
+    /// </summary>
     public class HuangliMonth
     {
         public DateTime Date { get; set; }
 
         public List<HuangliDay> HuangliDays { get; set; } = new List<HuangliDay>();
+
+        public List<HuangliDaysDetail> HuangliDaysDetails { get; set; } = new List<HuangliDaysDetail>();
+
+        public List<HuangliDay> resultList { get; set; } = new List<HuangliDay>();
 
         public override string ToString()
         {
@@ -226,15 +333,33 @@ window.Calendar.HuangLi['y{year}'] = window.Calendar.HuangLi['y{year}'] || [];")
         }
     }
 
-    public class HuangliDay
+    /// <summary>
+    /// 黄历基础信息
+    /// </summary>
+    public class HuangliDay: HuangliDaysDetail
     {
+        public int Id { get; set; }
         public int Day { get; set; }
         public string Yi { get; set; } // 宜
         public string Ji { get; set; } // 忌
+        public string Nongli { get; set; } //农历
+        public string GanZhi { get; set; } //天干地支
+        public string JieRi { get; set; }  //节日
 
         public override string ToString()
         {
             return string.Format("{{ 'y': '{0}', 'j': '{1}' }};", Yi, Ji);
         }
+    }
+
+    /// <summary>
+    /// 黄历详细信息
+    /// </summary>
+    public class HuangliDaysDetail
+    {
+        public int Id { get; set; }
+        public string JieQi { get; set; } //节气
+
+
     }
 }
